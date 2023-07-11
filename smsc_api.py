@@ -28,7 +28,7 @@ def check_response(response):
 
 class SMSSender:
 
-    def __init__(self, login: str, psw: str, valid: int, connections: int = 3):
+    def __init__(self, login: str, psw: str, valid: int = 1, connections: int = 3):
         self.login = login
         self.psw = psw
         self.valid = valid
@@ -45,6 +45,7 @@ class SMSSender:
         }
         response = await self.session.get('https://smsc.ru/sys/send.php', params=params)
         check_response(response)
+        return response.json()
 
     async def check_status(self, phone, msg_id, all_=1):
         params = {
@@ -69,27 +70,8 @@ class SMSSender:
 @click.option('--psw', help='Сообщение для отправки')
 @click.option('--valid', default=1, help='Время жизни сообщения в часах', type=int)
 def main(phones, msg, login, psw, valid):
-    with patch('__main__.SMSSender') as mock:
-        instance = mock.return_value
-        instance.send_sms.return_value = {
-            "id": 366,
-            "cnt": 1
-        }
-        instance.check_status.return_value = dict(
-            Status=0,
-            check_time='10.07.2023 21:16:09',
-            send_date='10.07.2023 21:16:09',
-            phone='79371752458',
-            cost=4.20,
-            sender_id='SMSC.RU',
-            status_name='Передано оператору',
-            message=66,
-            type=0
-        )
-        sender = SMSSender(login, psw, valid)
-        print(sender.send_sms())
-        print(sender.check_status())
-        # trio.run(sender.run, phones, msg)
+    sender = SMSSender(login, psw, valid)
+    trio.run(sender.run, phones, msg)
 
 
 if __name__ == '__main__':

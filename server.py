@@ -1,45 +1,20 @@
 import asyncio
 from datetime import datetime
-from typing import NoReturn
-from unittest.mock import patch
 
-from environs import Env
-from pydantic import BaseModel, ValidationError
+import redis.asyncio as aioredis
+from pydantic import ValidationError
 from quart import Quart, render_template, websocket, request
 
-from broker import Broker
+from classes import Settings, Message, SendingResult, DbWrapper
+from redis_client import RedisClient
 from smsc_api import SMSSender
 
 app = Quart(__name__)
-broker = Broker()
-env = Env()
-env.read_env()
-sms_sender = SMSSender(
-    login=env('SMSC_LOGIN'),
-    psw=env('SMSC_PSW')
-)
-PHONES = ['79371752458']
-
-
-class Message(BaseModel):
-    text: list[str]
-
-
-class SendingResult(BaseModel):
-    id: int
-    cnt: int
-
-
-class SendingStatus(BaseModel):
-    Status: int
-    check_time: str
-    send_date: str
-    phone: str
-    cost: float
-    sender_id: str
-    status_name: str
-    message: int
-    type: int
+PHONES = [
+    '79371752458',
+    '911',
+    '112',
+]
 
 
 @app.get("/")
@@ -49,6 +24,9 @@ async def index():
 
 @app.post("/send/")
 async def send():
+    redis = RedisClient()
+    db = DbWrapper(redis)
+
     form = await request.form
     # with patch('__main__.SMSSender') as mock:
     #     instance = mock.return_value
@@ -68,33 +46,32 @@ async def send():
             "errorMessage": "Wrong data format"
         }
 
-    result = await sms_sender.send_sms(PHONES, msg.text[0])
+    sending_result = await SMSSender().send_sms(PHONES, msg.text[0])
     try:
-        result = SendingResult.model_validate(result)
+        sending_result = SendingResult.model_validate(sending_result)
     except ValidationError:
         return {
             "errorMessage": "Service error"
         }
-    else:
-        return {
-            "msgType": "SMSMailingStatus",
-            "SMSMailings": [
-                {
-                    "timestamp": datetime.now().timestamp(),
-                    "SMSText": msg.text,
-                    "mailingId": result.id,
-                    "totalSMSAmount": result.cnt,
-                    "deliveredSMSAmount": 0,
-                    "failedSMSAmount": 0,
-                }
-            ]
-        }
 
+    try:
+        await db.add_sms_mailing(str(sending_result.id), PHONES, msg.text[0])
+    finally:
+        await redis.client.close()
 
-async def _receive() -> NoReturn:
-    while True:
-        message = await websocket.receive()
-        await broker.publish(message)
+    await websocket.send_json({
+        "msgType": "SendingReport",
+        "SMSMailings": [
+            {
+                "timestamp": datetime.now().timestamp(),
+                "SMSText": msg.text,
+                "mailingId": sending_result.id,
+                "totalSMSAmount": sending_result.cnt,
+                "deliveredSMSAmount": 0,
+                "failedSMSAmount": 0,
+            }
+        ]
+    })
 
 
 @app.websocket("/ws")
@@ -124,5 +101,17 @@ async def ws() -> None:
         await asyncio.sleep(1)
 
 
-if __name__ == '__main__':
+def main():
+    settings = Settings()
+    SMSSender(
+        login=settings.smsc_login,
+        psw=settings.smsc_psw
+    )
+    RedisClient(
+        redis_url=settings.redis_url
+    )
     app.run(debug=True)
+
+
+if __name__ == '__main__':
+    main()

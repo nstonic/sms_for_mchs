@@ -1,5 +1,4 @@
 from json import JSONDecodeError
-from unittest.mock import patch
 
 import asyncclick as click
 import trio
@@ -27,18 +26,27 @@ def check_response(response):
 
 
 class SMSSender:
+    _instance = None
 
-    def __init__(self, login: str, psw: str, valid: int = 1, connections: int = 3):
-        self.login = login
-        self.psw = psw
-        self.valid = valid
-        self.session = Session(connections=connections)
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
-    async def send_sms(self, phones, msg):
-        params = {
-            'login': self.login,
-            'psw': self.psw,
-            'valid': self.valid,
+    def __init__(self, **kwargs):
+        if not hasattr(self, 'params'):
+            self.params = {
+                'login': kwargs['login'],
+                'psw': kwargs['psw'],
+            }
+        if not hasattr(self, 'connections'):
+            self.session = Session(
+                connections=kwargs.get('connections', 3)
+            )
+
+    async def send_sms(self, phones, msg, valid=1):
+        params = self.params | {
+            'valid': valid,
             'phones': ','.join(phones),
             'mes': msg,
             'fmt': 3
@@ -48,9 +56,7 @@ class SMSSender:
         return response.json()
 
     async def check_status(self, phone, msg_id, all_=1):
-        params = {
-            'login': self.login,
-            'psw': self.psw,
+        params = self.params | {
             'phone': phone,
             'id': msg_id,
             'all': all_
@@ -58,9 +64,9 @@ class SMSSender:
         response = await self.session.get('https://smsc.ru/sys/status.php', params=params)
         check_response(response)
 
-    async def run(self, phones, msg):
+    async def run(self, phones, msg, valid):
         async with trio.open_nursery() as nursery:
-            nursery.start_soon(self.send_sms, phones, msg)
+            nursery.start_soon(self.send_sms, phones, msg, valid)
 
 
 @click.command()
@@ -70,8 +76,8 @@ class SMSSender:
 @click.option('--psw', help='Сообщение для отправки')
 @click.option('--valid', default=1, help='Время жизни сообщения в часах', type=int)
 def main(phones, msg, login, psw, valid):
-    sender = SMSSender(login, psw, valid)
-    trio.run(sender.run, phones, msg)
+    sender = SMSSender(login=login, psw=psw)
+    trio.run(sender.run, phones, msg,valid)
 
 
 if __name__ == '__main__':

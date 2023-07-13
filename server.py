@@ -66,7 +66,7 @@ async def ws() -> None:
                     "timestamp": sms_mailing.created_at,
                     "SMSText": sms_mailing.text,
                     "mailingId": sms_mailing.sms_id,
-                    "totalSMSAmount": len(sms_mailing.phones),
+                    "totalSMSAmount": sms_mailing.phones_count,
                     "deliveredSMSAmount": sms_mailing.count_phones_by_status('delivered'),
                     "failedSMSAmount": sms_mailing.count_phones_by_status('failed')
                 }

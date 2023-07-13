@@ -64,8 +64,8 @@ class SMSSender:
 @click.command()
 @click.argument('msg')
 @click.argument('phones', nargs=-1)
-@click.option('--login', help='Сообщение для отправки')
-@click.option('--psw', help='Сообщение для отправки')
+@click.option('--login', help='Логин')
+@click.option('--psw', help='Пароль')
 @click.option('--valid', default=1, help='Время жизни сообщения в часах', type=int)
 def main(phones, msg, login, psw, valid):
     sender = SMSSender(login=login, psw=psw)

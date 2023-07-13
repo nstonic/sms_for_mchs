@@ -1,19 +1,21 @@
-import asyncio
-from datetime import datetime
-
 import redis.asyncio as aioredis
+import trio
+import trio_asyncio
 from pydantic import ValidationError
-from quart import Quart, render_template, websocket, request
+from quart import render_template, websocket, request
+from quart_trio import QuartTrio
 
-from classes import Settings, Message, SendingResult, DbWrapper
-from redis_client import RedisClient
+from classes import Settings, Message, SendingResult, DbWrapper, SmsMailing
+from hypercorn.trio import serve
+from hypercorn.config import Config as HyperConfig
 from smsc_api import SMSSender
 
-app = Quart(__name__)
+app = QuartTrio(__name__)
 PHONES = [
     '79371752458',
-    '911',
     '112',
+    '911',
+    '900'
 ]
 
 
@@ -24,21 +26,9 @@ async def index():
 
 @app.post("/send/")
 async def send():
-    redis = RedisClient()
-    db = DbWrapper(redis)
+    db = app.db_pool
 
     form = await request.form
-    # with patch('__main__.SMSSender') as mock:
-    #     instance = mock.return_value
-    #     instance.send_sms.return_value = {
-    #         "id": 366,
-    #         "cnt": 1
-    #     }
-    #     sms_sender = SMSSender(
-    #         login=env('SMSC_LOGIN'),
-    #         psw=env('SMSC_PSW')
-    #     )
-    #     result = sms_sender.send_sms(PHONES, form['text'])
     try:
         msg = Message.model_validate(form)
     except ValidationError:
@@ -46,7 +36,7 @@ async def send():
             "errorMessage": "Wrong data format"
         }
 
-    sending_result = await SMSSender().send_sms(PHONES, msg.text[0])
+    sending_result = await app.sms_sender.send_sms(PHONES, msg.text[0])
     try:
         sending_result = SendingResult.model_validate(sending_result)
     except ValidationError:
@@ -54,64 +44,64 @@ async def send():
             "errorMessage": "Service error"
         }
 
-    try:
-        await db.add_sms_mailing(str(sending_result.id), PHONES, msg.text[0])
-    finally:
-        await redis.client.close()
+    await db.add_sms_mailing(str(sending_result.id), PHONES, msg.text[0])
+    sms_mailings = await db.get_sms_mailings(str(sending_result.id))
 
-    await websocket.send_json({
-        "msgType": "SendingReport",
-        "SMSMailings": [
-            {
-                "timestamp": datetime.now().timestamp(),
-                "SMSText": msg.text,
-                "mailingId": sending_result.id,
-                "totalSMSAmount": sending_result.cnt,
-                "deliveredSMSAmount": 0,
-                "failedSMSAmount": 0,
-            }
-        ]
-    })
+    return sms_mailings
 
 
 @app.websocket("/ws")
 async def ws() -> None:
-    for i in range(100):
+    db = app.db_pool
+    while True:
+        sms_ids = await db.list_sms_mailings()
+        sms_mailings = [
+            SmsMailing.model_validate(sms_mailing)
+            for sms_mailing in await db.get_sms_mailings(*sms_ids)
+        ]
         await websocket.send_json({
             "msgType": "SMSMailingStatus",
             "SMSMailings": [
                 {
-                    "timestamp": 1123131392.734,
-                    "SMSText": "Сегодня гроза! Будьте осторожны!",
-                    "mailingId": "1",
-                    "totalSMSAmount": 100,
-                    "deliveredSMSAmount": i,
-                    "failedSMSAmount": 0,
-                },
-                {
-                    "timestamp": 1323141112.924422,
-                    "SMSText": "Новогодняя акция!!! Приходи в магазин и получи скидку!!!",
-                    "mailingId": "new-year",
-                    "totalSMSAmount": 100,
-                    "deliveredSMSAmount": i,
-                    "failedSMSAmount": 0,
-                },
+                    "timestamp": sms_mailing.created_at,
+                    "SMSText": sms_mailing.text,
+                    "mailingId": sms_mailing.sms_id,
+                    "totalSMSAmount": len(sms_mailing.phones),
+                    "deliveredSMSAmount": sms_mailing.count_phones_by_status('delivered'),
+                    "failedSMSAmount": sms_mailing.count_phones_by_status('failed')
+                }
+                for sms_mailing in sms_mailings
             ]
         })
-        await asyncio.sleep(1)
+        await trio.sleep(1)
 
 
-def main():
+@app.before_serving
+async def create_db_pool():
     settings = Settings()
-    SMSSender(
+    redis = aioredis.from_url(
+        settings.redis_url,
+        decode_responses=True
+    )
+    app.db_pool = DbWrapper(redis)
+    app.sms_sender = SMSSender(
         login=settings.smsc_login,
         psw=settings.smsc_psw
     )
-    RedisClient(
-        redis_url=settings.redis_url
-    )
-    app.run(debug=True)
+
+
+@app.after_serving
+async def close_db_pool():
+    await app.db_pool.redis.close()
+
+
+async def run_server():
+    async with trio_asyncio.open_loop():
+        config = HyperConfig()
+        config.bind = ['127.0.0.1:5000']
+        config.use_reloader = True
+        await serve(app, config)
 
 
 if __name__ == '__main__':
-    main()
+    trio.run(run_server)

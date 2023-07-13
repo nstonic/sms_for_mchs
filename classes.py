@@ -25,6 +25,20 @@ class SendingResult(BaseModel):
     cnt: int
 
 
+class SmsMailing(BaseModel):
+    sms_id: str
+    text: str
+    created_at: float
+    phones_count: int
+    phones: dict
+
+    def count_phones_by_status(self, status: str):
+        return len(list(filter(
+            lambda item: item[1] == status,
+            self.phones.items()
+        )))
+
+
 class SendingStatus(BaseModel):
     Status: int
     check_time: str

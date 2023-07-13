@@ -26,23 +26,15 @@ def check_response(response):
 
 
 class SMSSender:
-    _instance = None
 
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self, **kwargs):
-        if not hasattr(self, 'params'):
-            self.params = {
-                'login': kwargs['login'],
-                'psw': kwargs['psw'],
-            }
-        if not hasattr(self, 'connections'):
-            self.session = Session(
-                connections=kwargs.get('connections', 3)
-            )
+    def __init__(self, login, psw, connections=3):
+        self.params = {
+            'login': login,
+            'psw': psw,
+        }
+        self.session = Session(
+            connections=connections
+        )
 
     async def send_sms(self, phones, msg, valid=1):
         params = self.params | {
@@ -77,7 +69,7 @@ class SMSSender:
 @click.option('--valid', default=1, help='Время жизни сообщения в часах', type=int)
 def main(phones, msg, login, psw, valid):
     sender = SMSSender(login=login, psw=psw)
-    trio.run(sender.run, phones, msg,valid)
+    trio.run(sender.run, phones, msg, valid)
 
 
 if __name__ == '__main__':

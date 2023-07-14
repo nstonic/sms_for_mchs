@@ -40,7 +40,7 @@ class SmsMailing(BaseModel):
 
 
 class SendingStatus(BaseModel):
-    Status: int
+    status: int
     check_time: str
     send_date: str
     phone: str
